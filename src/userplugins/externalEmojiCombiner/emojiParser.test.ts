@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 
-import { parseEmojiTokens, removeEmojiTokens } from "./emojiParser";
+import { parseEmojiTokens, removeEmojiTokens, selectEmojiTokensToCombine } from "./emojiParser";
 
 const raw = "<:first:123> <a:second:456>";
 const rawTokens = parseEmojiTokens(raw);
@@ -30,5 +30,16 @@ assert.equal(parseEmojiTokens("\\[dance](https://cdn.discordapp.com/emojis/1.gif
 assert.equal(parseEmojiTokens("`<:code:1>` ```https://cdn.discordapp.com/emojis/2.gif```").length, 0);
 assert.equal(parseEmojiTokens("<:bad/name:1> <:bad<name:2>").length, 0);
 assert.equal(removeEmojiTokens("keep  spacing\n  indented <:one:1> <:two:2>", parseEmojiTokens("keep  spacing\n  indented <:one:1> <:two:2>")), "keep  spacing\n  indented");
+
+const localAndExternal = "<:local:111> <:external:222>";
+const localAndExternalTokens = parseEmojiTokens(localAndExternal);
+const combinedTokens = selectEmojiTokensToCombine(localAndExternalTokens, new Set(["222"]), 2, 20);
+assert.deepEqual(combinedTokens?.map(token => token.id), ["111", "222"]);
+assert.equal(removeEmojiTokens(localAndExternal, combinedTokens ?? []), "");
+assert.equal(selectEmojiTokensToCombine(localAndExternalTokens, new Set(), 2, 20), null);
+assert.throws(
+    () => selectEmojiTokensToCombine(localAndExternalTokens, new Set(["222"]), 2, 1),
+    /configured 1 emoji limit/
+);
 
 console.log("ExternalEmojiCombiner parser checks passed.");

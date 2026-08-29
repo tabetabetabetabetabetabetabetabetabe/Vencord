@@ -1,8 +1,8 @@
 # ExternalEmojiCombiner
 
-ExternalEmojiCombiner turns external custom emojis into one transparent image attachment. Select multiple emojis in Discord's normal emoji picker and press Enter or the Send button once; recipients see a normal PNG or GIF without installing Vencord.
+ExternalEmojiCombiner turns custom emojis into one transparent image attachment when the message includes an external emoji. Select multiple emojis in Discord's normal emoji picker and press Enter or the Send button once; recipients see a normal PNG or GIF without installing Vencord.
 
-By default, conversion runs when a message contains at least two custom emojis, includes at least one emoji Discord cannot send natively in that channel, and otherwise contains only custom emojis and whitespace. Natively usable emojis remain normal Discord emojis. In DMs, all custom emojis are treated as external.
+By default, conversion runs when a message contains at least two custom emojis, includes at least one emoji Discord cannot send natively in that channel, and otherwise contains only custom emojis and whitespace. Once triggered, all custom emojis in that message—including emojis from the current server—are combined into the same image. Messages containing only natively usable emojis remain unchanged. In DMs, all custom emojis are treated as external.
 
 ## Installation
 
@@ -19,9 +19,9 @@ The plugin must start before FakeNitro's send hook, so changing its enabled stat
 | Minimum Emoji Count | 2 | Required custom emoji count in the message, from 1 to 20. |
 | Emoji Size | 64px | Square tile size: 32, 48, 64, 96, or 128px. |
 | Gap | 4px | Transparent spacing between tiles, from 0 to 16px. |
-| Mixed Text Mode | Off | Keeps text/local emojis in the message and moves only external emojis into the attachment. |
+| Mixed Text Mode | Off | Keeps non-emoji text in the message and moves all custom emojis into the attachment when combining is triggered. |
 | Preserve Animation | On | Produces an animated GIF when any combined emoji is animated. |
-| Max Emojis | 20 | Refuses conversion above the configured limit instead of partially changing the message. |
+| Max Emojis | 20 | Refuses conversion when the total number of custom emojis exceeds the configured limit. |
 
 ## FakeNitro compatibility
 

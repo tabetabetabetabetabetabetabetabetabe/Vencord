@@ -13,7 +13,7 @@ import { CloudUploadPlatform } from "@vencord/discord-types/enums";
 import { findLazy } from "@webpack";
 import { EmojiStore, GuildMemberStore, PermissionsBits, PermissionStore, showToast, Toasts, UserStore } from "@webpack/common";
 
-import { EmojiToken, parseEmojiTokens, removeEmojiTokens } from "./emojiParser";
+import { EmojiToken, parseEmojiTokens, removeEmojiTokens, selectEmojiTokensToCombine } from "./emojiParser";
 import { composeEmojiImage, EmojiImage } from "./imageComposer";
 
 const logger = new Logger("ExternalEmojiCombiner");
@@ -24,7 +24,7 @@ const UPLOAD_TIMEOUT_MS = 60_000;
 const settings = definePluginSettings({
     minimumEmojiCount: {
         default: 2,
-        description: "Minimum number of custom emojis required in the message before combining external ones.",
+        description: "Minimum number of custom emojis required before a message containing an external emoji is combined.",
         displayName: "Minimum Emoji Count",
         markers: makeRange(1, 20),
         stickToMarkers: false,
@@ -46,7 +46,7 @@ const settings = definePluginSettings({
     },
     mixedTextMode: {
         default: false,
-        description: "Remove external emojis from mixed text and send them as one image attachment.",
+        description: "When an external emoji triggers combining, remove all custom emojis from mixed text and send them as one image attachment.",
         displayName: "Mixed Text Mode",
         type: OptionType.BOOLEAN
     },
@@ -58,7 +58,7 @@ const settings = definePluginSettings({
     },
     maxEmojis: {
         default: 20,
-        description: "Maximum number of external emojis allowed in one combined image.",
+        description: "Maximum number of custom emojis allowed in one combined image.",
         displayName: "Max Emojis",
         markers: makeRange(1, 20),
         stickToMarkers: false,
@@ -115,17 +115,19 @@ function getCombinePlan(message: MessageObject, props: SendMessageProps): Combin
             token
         };
     });
-    const external = resolved.filter(item => !canUseEmojiNatively(item.emoji, props));
+    const externalIds = new Set(resolved
+        .filter(item => !canUseEmojiNatively(item.emoji, props))
+        .map(item => item.token.id));
     const maximum = Math.min(20, Math.max(1, settings.store.maxEmojis));
     const minimum = Math.min(maximum, Math.max(1, settings.store.minimumEmojiCount));
+    const combinedTokens = selectEmojiTokensToCombine(tokens, externalIds, minimum, maximum);
 
-    if (resolved.length < minimum || external.length === 0) return null;
-    if (external.length > maximum) throw new Error(`Message contains more than the configured ${maximum} emoji limit`);
+    if (!combinedTokens) return null;
 
     return {
-        content: removeEmojiTokens(message.content, external.map(item => item.token)),
-        emojis: external.map(item => item.image),
-        ids: new Set(external.map(item => item.image.id))
+        content: removeEmojiTokens(message.content, combinedTokens),
+        emojis: resolved.map(item => item.image),
+        ids: new Set(resolved.map(item => item.image.id))
     };
 }
 
@@ -167,7 +169,7 @@ function uploadFile(upload: TCloudUpload) {
 
 export default definePlugin({
     name: "ExternalEmojiCombiner",
-    description: "Combines external custom emojis into a single uploaded image so everyone can see them.",
+    description: "Combines custom emojis into a single uploaded image when a message contains an external emoji.",
     tags: ["Emotes", "Chat"],
     authors: [{ id: 0n, name: "tabetabetabetabetabetabetabetabetabe" }],
     dependencies: ["MessageEventsAPI"],

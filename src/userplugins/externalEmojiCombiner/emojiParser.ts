@@ -17,6 +17,18 @@ export interface EmojiToken {
     start: number;
 }
 
+export function selectEmojiTokensToCombine(
+    tokens: EmojiToken[],
+    externalIds: ReadonlySet<string>,
+    minimum: number,
+    maximum: number
+) {
+    if (tokens.length < minimum || !tokens.some(token => externalIds.has(token.id))) return null;
+    if (tokens.length > maximum) throw new Error(`Message contains more than the configured ${maximum} emoji limit`);
+
+    return tokens;
+}
+
 function parseEmojiUrl(value: string) {
     try {
         const url = new URL(value);
