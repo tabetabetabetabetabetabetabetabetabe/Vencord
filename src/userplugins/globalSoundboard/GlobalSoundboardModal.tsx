@@ -88,7 +88,7 @@ interface SoundCardProps {
     toggleFavorite(sound: GlobalSound): void;
 }
 
-const SoundCard = React.memo(function SoundCard({
+function SoundCard({
     disabled,
     favorite,
     favoriteDisabled,
@@ -170,7 +170,7 @@ const SoundCard = React.memo(function SoundCard({
             </button>
         </article>
     );
-});
+}
 
 export function GlobalSoundboardModal(props: RenderModalProps) {
     const visibleSettings = settings.use([
