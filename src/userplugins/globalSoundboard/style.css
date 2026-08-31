@@ -205,27 +205,39 @@
     font-size: 10px;
 }
 
-.vc-gsb-favorite {
+.vc-gsb-favorite,
+.vc-gsb-preview {
     position: absolute;
-    top: 7px;
     right: 7px;
     width: 28px;
-    height: 28px;
     padding: 0;
     border: 0;
     border-radius: 5px;
     background: transparent;
     color: var(--interactive-muted);
     cursor: pointer;
+}
+
+.vc-gsb-favorite {
+    top: 7px;
+    height: 28px;
     font-size: 18px;
 }
 
-.vc-gsb-favorite:hover {
+.vc-gsb-preview {
+    bottom: 7px;
+    height: 24px;
+    font-size: 13px;
+}
+
+.vc-gsb-favorite:hover,
+.vc-gsb-preview:hover {
     background: var(--background-modifier-hover);
     color: var(--interactive-hover);
 }
 
-.vc-gsb-favorite:disabled {
+.vc-gsb-favorite:disabled,
+.vc-gsb-preview:disabled {
     cursor: not-allowed;
     opacity: 0.5;
 }
@@ -280,6 +292,7 @@
 
 .vc-gsb-card-main:focus-visible,
 .vc-gsb-favorite:focus-visible,
+.vc-gsb-preview:focus-visible,
 .vc-gsb-tabs button:focus-visible {
     outline: 2px solid var(--brand-500);
     outline-offset: 2px;

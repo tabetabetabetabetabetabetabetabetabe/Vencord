@@ -81,6 +81,7 @@ interface SoundCardProps {
     favoriteDisabled: boolean;
     filterGuild(sound: GlobalSound): void;
     onPlay(sound: GlobalSound): void;
+    onPreview(sound: GlobalSound): void;
     playing: boolean;
     showEmoji: boolean;
     showGuildIcons: boolean;
@@ -94,6 +95,7 @@ function SoundCard({
     favoriteDisabled,
     filterGuild,
     onPlay,
+    onPreview,
     playing,
     showEmoji,
     showGuildIcons,
@@ -112,6 +114,12 @@ function SoundCard({
                     disabled={disabled}
                     id="vc-global-soundboard-play"
                     label="再生"
+                />
+                <Menu.MenuItem
+                    action={() => onPreview(sound)}
+                    disabled={disabled}
+                    id="vc-global-soundboard-preview"
+                    label="プレビュー"
                 />
                 <Menu.MenuItem
                     action={() => toggleFavorite(sound)}
@@ -156,6 +164,16 @@ function SoundCard({
                     </span>
                     {!sound.available && <span className="vc-gsb-unavailable-label">利用不可</span>}
                 </span>
+            </button>
+            <button
+                aria-label={`${sound.name}をこの端末でプレビュー`}
+                className="vc-gsb-preview"
+                disabled={disabled}
+                onClick={() => onPreview(sound)}
+                title="この端末でプレビュー"
+                type="button"
+            >
+                ▶
             </button>
             <button
                 aria-label={favorite ? `${sound.name}をお気に入りから削除` : `${sound.name}をお気に入りに追加`}
@@ -389,7 +407,7 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
         }
     }, [recordHistory, visibleSettings.masterVolume]);
 
-    const playSound = React.useCallback(async (sound: GlobalSound) => {
+    const playSound = React.useCallback(async (sound: GlobalSound, forcedMode?: PlaybackMode) => {
         if (!storageReady) return;
         if (!soundStillExists(sound)) {
             showFailure("sound-deleted", "このSoundは削除されたか、サーバーから利用できなくなりました。");
@@ -400,7 +418,7 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
             return;
         }
 
-        const mode = visibleSettings.playbackMode as PlaybackMode;
+        const mode = forcedMode ?? visibleSettings.playbackMode as PlaybackMode;
         if (mode !== "native") {
             await playLocal(sound, mode);
             return;
@@ -428,6 +446,9 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
     }, []);
     const playSoundCard = React.useCallback((sound: GlobalSound) => {
         void playSound(sound);
+    }, [playSound]);
+    const previewSoundCard = React.useCallback((sound: GlobalSound) => {
+        void playSound(sound, "preview");
     }, [playSound]);
 
     return (
@@ -536,6 +557,7 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
                                         filterGuild={filterGuild}
                                         key={sound.key}
                                         onPlay={playSoundCard}
+                                        onPreview={previewSoundCard}
                                         playing={localPlayback?.key === sound.key || nativePlaying.has(sound.soundId)}
                                         showEmoji={visibleSettings.showEmoji}
                                         showGuildIcons={visibleSettings.showGuildIcons}
