@@ -19,6 +19,7 @@ export interface OutputDevice {
 export interface LocalPlayback {
     key: string;
     mode: "output" | "preview";
+    status: "loading" | "playing";
 }
 
 export class OutputDeviceMissingError extends Error {
@@ -34,7 +35,13 @@ let currentSoundVolume = 1;
 let currentToken = 0;
 let selectedOutputDevice = "default";
 let outputDeviceLoaded: Promise<void> | null = null;
+let outputDeviceWrites: Promise<void> = Promise.resolve();
+let outputDeviceRevision = 0;
+let outputRefreshRevision = 0;
+let audioGeneration = 0;
+let initialized = false;
 const listeners = new Set<(playing: LocalPlayback | null) => void>();
+const outputDeviceListeners = new Set<(deviceId: string) => void>();
 
 function emit(playing: LocalPlayback | null) {
     current = playing;
@@ -42,7 +49,8 @@ function emit(playing: LocalPlayback | null) {
 }
 
 function calculateVolume(masterVolume: number) {
-    return Math.min(1, Math.max(0, currentSoundVolume * masterVolume / 100));
+    const master = Number.isFinite(masterVolume) ? Math.min(200, Math.max(0, masterVolume)) : 100;
+    return Math.min(1, Math.max(0, currentSoundVolume * master / 100));
 }
 
 function applyVolume(masterVolume: number) {
@@ -63,7 +71,7 @@ export function supportsOutputSelection() {
     return typeof HTMLAudioElement !== "undefined"
         && typeof navigator !== "undefined"
         && navigator.mediaDevices?.enumerateDevices != null
-        && "setSinkId" in HTMLAudioElement.prototype;
+        && typeof HTMLAudioElement.prototype.setSinkId === "function";
 }
 
 export async function enumerateAudioOutputs(): Promise<OutputDevice[]> {
@@ -84,17 +92,93 @@ export function getSelectedOutputDevice() {
 }
 
 export function loadSelectedOutputDevice() {
-    return outputDeviceLoaded ??= DataStore.get<string>(OUTPUT_DEVICE_KEY)
+    if (outputDeviceLoaded) return outputDeviceLoaded;
+
+    const revision = outputDeviceRevision;
+    const generation = audioGeneration;
+    const pending = outputDeviceWrites
+        .catch(() => undefined)
+        .then(() => DataStore.get<string>(OUTPUT_DEVICE_KEY))
         .then(saved => {
-            if (typeof saved === "string" && saved) selectedOutputDevice = saved;
+            if (generation !== audioGeneration || revision !== outputDeviceRevision) return;
+            selectedOutputDevice = typeof saved === "string" && saved ? saved : "default";
+            outputDeviceListeners.forEach(listener => listener(selectedOutputDevice));
         })
-        .catch(error => showFailure("device-load", "出力デバイス設定を読み込めませんでした。", error));
+        .catch(error => {
+            if (outputDeviceLoaded === pending) outputDeviceLoaded = null;
+            throw error;
+        });
+    outputDeviceLoaded = pending;
+    return pending;
 }
 
-export async function selectOutputDevice(deviceId: string) {
-    const next = deviceId || "default";
-    await DataStore.set(OUTPUT_DEVICE_KEY, next);
+function saveOutputDevice(deviceId: string, cancelPlayback: boolean) {
+    const next = typeof deviceId === "string" && deviceId ? deviceId : "default";
+    if (cancelPlayback && next !== selectedOutputDevice && current?.mode === "output") stopCurrentSound();
     selectedOutputDevice = next;
+    outputDeviceRevision++;
+    // An explicit choice supersedes a pending read, including after a failed read.
+    outputDeviceLoaded = Promise.resolve();
+    outputDeviceListeners.forEach(listener => listener(next));
+    outputDeviceWrites = outputDeviceWrites
+        .catch(() => undefined)
+        .then(() => DataStore.set(OUTPUT_DEVICE_KEY, next));
+    return outputDeviceWrites;
+}
+
+export function selectOutputDevice(deviceId: string) {
+    return saveOutputDevice(deviceId, true);
+}
+
+export function subscribeOutputDevice(listener: (deviceId: string) => void) {
+    outputDeviceListeners.add(listener);
+    listener(selectedOutputDevice);
+    return () => {
+        outputDeviceListeners.delete(listener);
+    };
+}
+
+export async function refreshAudioOutputs(): Promise<OutputDevice[]> {
+    if (!supportsOutputSelection()) return [];
+
+    const refreshRevision = ++outputRefreshRevision;
+    const generation = audioGeneration;
+    await loadSelectedOutputDevice();
+    const revision = outputDeviceRevision;
+    const selected = selectedOutputDevice;
+    const outputs = await enumerateAudioOutputs();
+    if (generation !== audioGeneration || refreshRevision !== outputRefreshRevision || revision !== outputDeviceRevision)
+        return outputs;
+
+    if (selected !== "default" && !outputs.some(device => device.deviceId === selected)) {
+        await selectOutputDevice("default");
+        if (generation === audioGeneration && selectedOutputDevice === "default" && outputDeviceRevision === revision + 1)
+            showFailure("device-missing", "選択した出力デバイスが見つからないため、再生を停止してDefaultへ戻しました。");
+    }
+    return outputs;
+}
+
+function handleDeviceChange() {
+    const generation = audioGeneration;
+    void refreshAudioOutputs().catch(error => {
+        if (initialized && generation === audioGeneration)
+            showFailure("device-list", "オーディオ出力デバイスを取得できませんでした。", error);
+    });
+}
+
+export function initializeAudio() {
+    if (initialized) return;
+    initialized = true;
+    if (supportsOutputSelection()) {
+        navigator.mediaDevices.addEventListener?.("devicechange", handleDeviceChange);
+        handleDeviceChange();
+    } else {
+        const generation = audioGeneration;
+        void loadSelectedOutputDevice().catch(error => {
+            if (initialized && generation === audioGeneration)
+                showFailure("device-load", "出力デバイス設定を読み込めませんでした。", error);
+        });
+    }
 }
 
 export function subscribeLocalPlayback(listener: (playing: LocalPlayback | null) => void) {
@@ -117,7 +201,7 @@ export function stopCurrentSound() {
     emit(null);
 }
 
-async function setOutput(audioElement: HTMLAudioElement, mode: LocalPlayback["mode"]) {
+async function setOutput(audioElement: HTMLAudioElement, mode: LocalPlayback["mode"], token: number) {
     const setSinkId = audioElement.setSinkId?.bind(audioElement);
     if (mode === "preview") {
         await setSinkId?.("");
@@ -127,14 +211,17 @@ async function setOutput(audioElement: HTMLAudioElement, mode: LocalPlayback["mo
         throw new Error("Audio output selection is unavailable in this client");
 
     await loadSelectedOutputDevice();
+    if (token !== currentToken) return;
+    const revision = outputDeviceRevision;
     const sinkId = selectedOutputDevice === "default" ? "" : selectedOutputDevice;
     try {
         await setSinkId(sinkId);
     } catch (error) {
         const missing = error instanceof DOMException && error.name === "NotFoundError";
         if (sinkId === "" || !missing) throw error;
+        if (token !== currentToken || revision !== outputDeviceRevision) return;
 
-        await selectOutputDevice("default");
+        await saveOutputDevice("default", false);
         throw new OutputDeviceMissingError();
     }
 }
@@ -150,45 +237,38 @@ export async function playLocalSound(
     const audioElement = new Audio();
     audio = audioElement;
     currentSoundVolume = Number.isFinite(sound.volume) ? sound.volume : 1;
-    audioElement.preload = "auto";
-    audioElement.src = url;
-    audioElement.volume = calculateVolume(masterVolume);
-
-    try {
-        await setOutput(audioElement, mode);
-    } catch (error) {
-        if (audio === audioElement) audio = null;
-        stopAudioElement(audioElement);
-        if (token !== currentToken) return false;
-        throw error;
-    }
-    if (token !== currentToken) {
-        stopAudioElement(audioElement);
-        return false;
-    }
 
     const finish = () => {
         if (token !== currentToken) return;
+        currentToken++;
         if (audio === audioElement) audio = null;
         stopAudioElement(audioElement);
         emit(null);
     };
-    let started = false;
     audioElement.onended = finish;
     audioElement.onpause = finish;
     audioElement.onerror = () => {
         if (token !== currentToken) return;
         finish();
-        if (started) showFailure("audio-decode", "Soundの取得またはデコードに失敗しました。");
+        showFailure("audio-decode", "Soundの取得またはデコードに失敗しました。");
     };
+    emit({ key: sound.key, mode, status: "loading" });
 
     try {
+        audioElement.preload = "auto";
+        audioElement.src = url;
+        audioElement.volume = calculateVolume(masterVolume);
+        await setOutput(audioElement, mode, token);
+        if (token !== currentToken) {
+            stopAudioElement(audioElement);
+            return false;
+        }
         await audioElement.play();
-        started = true;
     } catch (error) {
-        if (audio === audioElement) audio = null;
+        const cancelled = token !== currentToken;
+        finish();
         stopAudioElement(audioElement);
-        if (token !== currentToken) return false;
+        if (cancelled) return false;
         throw error;
     }
     if (token !== currentToken) {
@@ -196,12 +276,19 @@ export async function playLocalSound(
         return false;
     }
 
-    emit({ key: sound.key, mode });
+    emit({ key: sound.key, mode, status: "playing" });
     return true;
 }
 
 export function disposeAudio() {
+    initialized = false;
+    audioGeneration++;
+    outputRefreshRevision++;
+    if (typeof navigator !== "undefined")
+        navigator.mediaDevices?.removeEventListener?.("devicechange", handleDeviceChange);
     stopCurrentSound();
     listeners.clear();
+    outputDeviceListeners.clear();
+    outputDeviceLoaded = null;
     audio = null;
 }

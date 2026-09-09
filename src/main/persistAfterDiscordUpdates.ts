@@ -59,7 +59,16 @@ function patchLatest() {
         console.info(`[Vencord] Detected Host Update (${currentVersion} -> ${latestVersion}). Repatching...`);
 
         renameSync(newAppAsar, newAppAsarBackup);
-        copyFileSync(oldVencordAsar, newAppAsar);
+        try {
+            copyFileSync(oldVencordAsar, newAppAsar);
+        } catch (err) {
+            try {
+                renameSync(newAppAsarBackup, newAppAsar);
+            } catch (restoreError) {
+                console.error("[Vencord] Failed to restore original host archive; backup retained at", newAppAsarBackup, restoreError);
+            }
+            throw err;
+        }
     } catch (err) {
         console.error("[Vencord] Failed to repatch latest host update", err);
     }
@@ -68,3 +77,12 @@ function patchLatest() {
 // Try to patch latest on before-quit
 // Discord's Win32 updater will call app.quit() on restart and open new version on will-quit
 app.on("before-quit", patchLatest);
+
+// Windows shutdown, restart and logoff do not emit before-quit.
+// Do not preventDefault: this must not cancel the session end.
+if (process.platform === "win32") {
+    app.on("browser-window-created", (_, window) => {
+        window.on("query-session-end", patchLatest);
+        window.on("session-end", patchLatest);
+    });
+}

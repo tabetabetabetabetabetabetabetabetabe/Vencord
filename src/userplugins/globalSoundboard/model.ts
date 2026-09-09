@@ -43,13 +43,14 @@ export function flattenSoundMap(
         const isDiscordDefaults = mapGuildId === "0";
         const guild = guilds[mapGuildId];
         if (!guild && !isDiscordDefaults) continue;
+        const guildIcon = guild ? getGuildIcon(guild) : undefined;
 
         for (const sound of sounds ?? []) {
             const guildId = sound.guildId || mapGuildId;
             result.push({
                 ...sound,
                 guildId,
-                guildIcon: guild ? getGuildIcon(guild) : undefined,
+                guildIcon,
                 guildName: guild?.name ?? "Discord Standard",
                 key: `${guildId}:${sound.soundId}`
             });
@@ -76,10 +77,11 @@ export function filterSounds(
         tab: SoundTab;
     }
 ) {
-    const byKey = new Map(sounds.map(sound => [sound.key, sound]));
-    const base = options.tab === "history"
-        ? options.history.map(key => byKey.get(key)).filter((sound): sound is GlobalSound => sound != null)
-        : sounds;
+    let base = sounds;
+    if (options.tab === "history") {
+        const byKey = new Map(sounds.map(sound => [sound.key, sound]));
+        base = options.history.map(key => byKey.get(key)).filter((sound): sound is GlobalSound => sound != null);
+    }
     const query = searchable(options.query.trim());
 
     return base.filter(sound => {
@@ -94,6 +96,9 @@ export function filterSounds(
 }
 
 export function pushRecent(history: readonly string[], key: string, limit: number) {
-    const safeLimit = Math.max(1, Math.floor(limit));
-    return [key, ...history.filter(item => item !== key)].slice(0, safeLimit);
+    return Array.from(new Set([key, ...history])).slice(0, normalizeHistoryLimit(limit));
+}
+
+export function normalizeHistoryLimit(limit: number) {
+    return Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.floor(limit))) : 30;
 }

@@ -5,15 +5,17 @@
  */
 
 import { definePluginSettings } from "@api/Settings";
+import { Button } from "@components/Button";
 import { makeRange, OptionType } from "@utils/types";
 import { Forms, React, Select } from "@webpack/common";
 
 import {
-    enumerateAudioOutputs,
     getSelectedOutputDevice,
-    loadSelectedOutputDevice,
+    refreshAudioOutputs,
     selectOutputDevice,
     setCurrentMasterVolume,
+    stopCurrentSound,
+    subscribeOutputDevice,
     supportsOutputSelection
 } from "./audio";
 import { showFailure } from "./soundboard";
@@ -24,73 +26,94 @@ export type FallbackMode = "disabled" | "output" | "preview";
 // Discord's Select declaration currently mistypes aria-label as boolean.
 const selectAriaLabel = (label: string) => ({ "aria-label": label }) as unknown as { "aria-label": boolean; };
 
-function OutputDeviceSetting() {
+export function OutputDeviceSetting({ compact = false }: { compact?: boolean; }) {
     const [devices, setDevices] = React.useState<{ label: string; value: string; }[]>([]);
     const [selected, setSelected] = React.useState(getSelectedOutputDevice());
     const [loading, setLoading] = React.useState(true);
+    const [failed, setFailed] = React.useState(false);
+    const mounted = React.useRef(false);
+    const request = React.useRef(0);
     const supported = supportsOutputSelection();
 
     const refresh = React.useCallback(async () => {
+        const id = ++request.current;
         if (!supported) {
             setLoading(false);
             return;
         }
 
+        setLoading(true);
+        setFailed(false);
         try {
-            await loadSelectedOutputDevice();
-            const outputs = await enumerateAudioOutputs();
+            const outputs = await refreshAudioOutputs();
+            if (!mounted.current || id !== request.current) return;
             const options = [
                 { label: "Default", value: "default" },
                 ...outputs
-                    .filter(device => device.deviceId !== "default")
+                    .filter(device => device.deviceId && device.deviceId !== "default")
                     .map(device => ({ label: device.label, value: device.deviceId }))
             ];
-            let nextSelected = getSelectedOutputDevice();
-            if (nextSelected !== "default" && !options.some(option => option.value === nextSelected)) {
-                nextSelected = "default";
-                await selectOutputDevice(nextSelected);
-                showFailure("device-missing", "選択した出力デバイスが見つからないため、Defaultへ戻しました。");
-            }
-            setSelected(nextSelected);
+            setSelected(getSelectedOutputDevice());
             setDevices(options);
         } catch (error) {
+            if (!mounted.current || id !== request.current) return;
+            setFailed(true);
             showFailure("device-list", "オーディオ出力デバイスを取得できませんでした。", error);
         } finally {
-            setLoading(false);
+            if (mounted.current && id === request.current) setLoading(false);
         }
     }, [supported]);
 
     React.useEffect(() => {
+        mounted.current = true;
+        const unsubscribe = subscribeOutputDevice(setSelected);
         void refresh();
-        if (!supported) return;
-
-        navigator.mediaDevices?.addEventListener?.("devicechange", refresh);
-        return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refresh);
+        if (supported) navigator.mediaDevices.addEventListener?.("devicechange", refresh);
+        return () => {
+            mounted.current = false;
+            request.current++;
+            unsubscribe();
+            if (supported) navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
+        };
     }, [refresh, supported]);
 
     return (
         <div>
-            <Forms.FormTitle>Audio Output Device</Forms.FormTitle>
+            {!compact && <Forms.FormTitle>Audio Output Device</Forms.FormTitle>}
             {!supported
                 ? <Forms.FormText>この環境ではsetSinkIdによる出力先の選択を利用できません。</Forms.FormText>
                 : <Select
                     {...selectAriaLabel("Audio Output Device")}
                     closeOnSelect
-                    isDisabled={loading}
+                    isDisabled={loading || failed}
                     isSelected={value => value === selected}
                     options={devices}
                     placeholder={loading ? "Loading devices…" : "Select an output device"}
                     select={async value => {
+                        const id = ++request.current;
+                        setLoading(true);
                         try {
                             await selectOutputDevice(value);
-                            setSelected(value);
                         } catch (error) {
-                            showFailure("device-save", "出力デバイス設定を保存できませんでした。", error);
+                            if (mounted.current && id === request.current)
+                                showFailure("device-save", "出力先は変更しましたが、設定を保存できませんでした。再起動後に再選択してください。", error);
+                        } finally {
+                            if (mounted.current && id === request.current) {
+                                setSelected(getSelectedOutputDevice());
+                                setLoading(false);
+                            }
                         }
                     }}
                     serialize={String}
                 />}
-            <Forms.FormText>選択したデバイスIDはこの端末のDataStoreだけに保存され、外部へ送信しません。</Forms.FormText>
+            {failed && <Forms.FormText>出力先を確認できませんでした。再試行してください。</Forms.FormText>}
+            {supported && <Button disabled={loading} onClick={() => void refresh()} size="small" variant="secondary">
+                {failed ? "再試行" : "出力先を再読み込み"}
+            </Button>}
+            {!compact && <Forms.FormText>
+                Audio Outputは選択した再生デバイスへ出力します。VCへ送るには仮想ケーブルなどをDiscordの入力に設定してください。マイクの混合は行いません。
+                デバイスIDはこの端末のDataStoreだけに保存され、外部へ送信しません。
+            </Forms.FormText>}
         </div>
     );
 }
@@ -100,6 +123,7 @@ export const settings = definePluginSettings({
         type: OptionType.SELECT,
         description: "How cards play Soundboard sounds.",
         displayName: "Playback Mode",
+        onChange: stopCurrentSound,
         options: [
             { label: "Native Discord", value: "native", default: true },
             { label: "Audio Output", value: "output" },
@@ -118,7 +142,7 @@ export const settings = definePluginSettings({
     },
     outputDevice: {
         type: OptionType.COMPONENT,
-        component: OutputDeviceSetting
+        component: () => <OutputDeviceSetting />
     },
     masterVolume: {
         type: OptionType.SLIDER,

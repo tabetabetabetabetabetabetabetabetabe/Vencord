@@ -1,9 +1,11 @@
 .vc-gsb-root {
     display: flex;
     height: clamp(360px, 70vh, 760px);
+    max-height: calc(100dvh - 160px);
     flex-direction: column;
     gap: 12px;
     color: var(--text-default, var(--text-normal));
+    overflow: auto;
 }
 
 .vc-gsb-controls {
@@ -88,10 +90,32 @@
 }
 
 .vc-gsb-list {
-    min-height: 0;
+    min-height: 160px;
     flex: 1;
     padding: 2px 4px 4px 2px;
     overflow: auto;
+}
+
+.vc-gsb-playback-help {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.vc-gsb-playback-help p {
+    margin: 0 0 4px;
+}
+
+.vc-gsb-playback-status:not(:empty) {
+    margin-top: 4px;
+    color: var(--text-default, var(--text-normal));
+}
+
+.vc-gsb-storage-status {
+    padding: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
 }
 
 .vc-gsb-grid {
@@ -118,6 +142,11 @@
 .vc-gsb-card-playing {
     border-color: var(--brand-500);
     box-shadow: inset 0 0 0 1px var(--brand-500);
+}
+
+.vc-gsb-card-loading {
+    border-color: var(--brand-500);
+    border-style: dashed;
 }
 
 .vc-gsb-card-unavailable {
@@ -285,9 +314,14 @@
     color: var(--text-default, var(--text-normal));
 }
 
-.vc-gsb-more {
-    display: block;
-    margin: 12px auto 0;
+.vc-gsb-pagination {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
 }
 
 .vc-gsb-card-main:focus-visible,
@@ -316,5 +350,15 @@
 
     .vc-gsb-grid {
         grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vc-gsb-card {
+        transition: none;
+    }
+
+    .vc-gsb-card:hover {
+        transform: none;
     }
 }

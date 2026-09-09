@@ -10,7 +10,7 @@ import { ChatBarButton, ChatBarButtonFactory } from "@api/ChatButtons";
 import definePlugin, { IconComponent } from "@utils/types";
 import { closeModal, openModal } from "@webpack/common";
 
-import { disposeAudio, loadSelectedOutputDevice, supportsOutputSelection } from "./audio";
+import { disposeAudio, initializeAudio, supportsOutputSelection } from "./audio";
 import { GlobalSoundboardModal } from "./GlobalSoundboardModal";
 import { settings } from "./settings";
 
@@ -99,7 +99,7 @@ export default definePlugin({
             if (settings.store.playbackMode === "output") settings.store.playbackMode = "preview";
             if (settings.store.fallbackMode === "output") settings.store.fallbackMode = "preview";
         }
-        void loadSelectedOutputDevice();
+        initializeAudio();
     },
 
     stop() {

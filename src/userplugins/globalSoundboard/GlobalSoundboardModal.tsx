@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import * as DataStore from "@api/DataStore";
 import { Button } from "@components/Button";
 import { copyWithToast } from "@utils/discord";
 import type { RenderModalProps } from "@vencord/discord-types";
@@ -30,18 +29,20 @@ import {
     subscribeLocalPlayback,
     supportsOutputSelection
 } from "./audio";
-import { filterSounds, GlobalSound, pushRecent, SoundTab } from "./model";
-import { FallbackMode, PlaybackMode, settings } from "./settings";
+import { filterSounds, GlobalSound, normalizeHistoryLimit, pushRecent, SoundTab } from "./model";
+import { FallbackMode, OutputDeviceSetting, PlaybackMode, settings } from "./settings";
 import {
     collectGlobalSounds,
+    getCurrentSound,
+    getNativePlayingSoundIds,
     playNative,
     refreshSoundboard,
     resolveSoundUrl,
-    showFailure,
-    soundStillExists
+    showFailure
 } from "./soundboard";
+import { loadPickerData, savePickerData } from "./storage";
 
-const INITIAL_RENDER_LIMIT = 240;
+const PAGE_SIZE = 240;
 const PLAYBACK_OPTIONS = [
     { label: "Native Discord", value: "native" },
     { label: "Audio Output", value: "output" },
@@ -56,10 +57,6 @@ interface GuildOption {
     icon?: string;
     label: string;
     value: string;
-}
-
-function getDataKey(name: "favorites" | "history" | "search") {
-    return `GlobalSoundboard_${UserStore.getCurrentUser()?.id ?? "unknown"}_${name}`;
 }
 
 function SoundEmoji({ sound }: { sound: GlobalSound; }) {
@@ -82,6 +79,7 @@ interface SoundCardProps {
     filterGuild(sound: GlobalSound): void;
     onPlay(sound: GlobalSound): void;
     onPreview(sound: GlobalSound): void;
+    loading: boolean;
     playing: boolean;
     showEmoji: boolean;
     showGuildIcons: boolean;
@@ -96,6 +94,7 @@ function SoundCard({
     filterGuild,
     onPlay,
     onPreview,
+    loading,
     playing,
     showEmoji,
     showGuildIcons,
@@ -143,14 +142,15 @@ function SoundCard({
 
     return (
         <article
-            className={`vc-gsb-card${playing ? " vc-gsb-card-playing" : ""}${!sound.available ? " vc-gsb-card-unavailable" : ""}`}
+            className={`vc-gsb-card${playing ? " vc-gsb-card-playing" : ""}${loading ? " vc-gsb-card-loading" : ""}${!sound.available ? " vc-gsb-card-unavailable" : ""}`}
             onContextMenu={openContextMenu}
         >
             <button
-                aria-label={`${sound.name} — ${sound.guildName}${playing ? "（再生中）" : ""}${sound.available ? "" : "（利用不可）"}`}
+                aria-label={`${sound.name} — ${sound.guildName}${loading ? "（読み込み中）" : playing ? "（再生中）" : ""}${sound.available ? "" : "（利用不可）"}`}
                 className="vc-gsb-card-main"
                 disabled={disabled}
                 onClick={() => onPlay(sound)}
+                title={`${sound.name} — ${sound.guildName}`}
                 type="button"
             >
                 {showEmoji && <SoundEmoji sound={sound} />}
@@ -191,6 +191,14 @@ function SoundCard({
 }
 
 export function GlobalSoundboardModal(props: RenderModalProps) {
+    const userId = useStateFromStores([UserStore], () => UserStore.getCurrentUser()?.id ?? null);
+
+    return userId
+        ? <SoundboardPicker {...props} key={userId} userId={userId} />
+        : <Modal {...props} title="Global Soundboard">Discordへログインすると利用できます。</Modal>;
+}
+
+function SoundboardPicker({ userId, ...props }: RenderModalProps & { userId: string; }) {
     const visibleSettings = settings.use([
         "fallbackMode",
         "historyLimit",
@@ -207,33 +215,33 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
     const [tab, setTab] = React.useState<SoundTab>("all");
     const [favorites, setFavorites] = React.useState<Set<string>>(new Set());
     const [history, setHistory] = React.useState<string[]>([]);
-    const [storageReady, setStorageReady] = React.useState(false);
+    const [storageStatus, setStorageStatus] = React.useState<"error" | "loading" | "ready">("loading");
+    const [storageAttempt, setStorageAttempt] = React.useState(0);
+    const [storageWriteFailed, setStorageWriteFailed] = React.useState(false);
     const [refreshAttempt, setRefreshAttempt] = React.useState(0);
     const [refreshStatus, setRefreshStatus] = React.useState<"error" | "loading" | "ready">("loading");
-    const [visibleLimit, setVisibleLimit] = React.useState(INITIAL_RENDER_LIMIT);
+    const [page, setPage] = React.useState(0);
     const [localPlayback, setLocalPlayback] = React.useState<LocalPlayback | null>(null);
-    const writeQueue = React.useRef<Promise<unknown>>(Promise.resolve());
+    const [nativeRequest, setNativeRequest] = React.useState("");
+    const mountedRef = React.useRef(true);
+    const listRef = React.useRef<HTMLDivElement>(null);
+    const favoritesRef = React.useRef(favorites);
+    const historyRef = React.useRef(history);
     const searchRef = React.useRef(search);
+    const searchEditedRef = React.useRef(false);
+    const storageReady = storageStatus === "ready";
     const storageReadyRef = React.useRef(storageReady);
     const rememberSearchRef = React.useRef(visibleSettings.rememberSearch);
     const stores = React.useMemo(() => [SoundboardStore, GuildStore].filter(Boolean), []);
     const allSounds = useStateFromStores(stores, collectGlobalSounds);
     const nativePlayingIds = useStateFromStores(
         SoundboardStore ? [SoundboardStore] : [],
-        () => {
-            const playing: string[] = [];
-            for (const sounds of SoundboardStore?.getSounds?.()?.values?.() ?? []) {
-                for (const sound of sounds) {
-                    if (SoundboardStore.isPlayingSound(sound.soundId)) playing.push(sound.soundId);
-                }
-            }
-            return playing.sort();
-        },
+        getNativePlayingSoundIds,
         undefined,
         (previous, next) => previous.length === next.length && previous.every((id, index) => id === next[index])
     );
     const nativePlaying = React.useMemo(() => new Set(nativePlayingIds), [nativePlayingIds]);
-    const historyLimit = Math.min(100, Math.max(1, Math.floor(visibleSettings.historyLimit)));
+    const historyLimit = normalizeHistoryLimit(visibleSettings.historyLimit);
     const outputSupported = supportsOutputSelection();
     const playbackOptions = React.useMemo(() => PLAYBACK_OPTIONS.map(option => ({
         ...option,
@@ -247,37 +255,35 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
     storageReadyRef.current = storageReady;
     rememberSearchRef.current = visibleSettings.rememberSearch;
 
-    const queueWrite = React.useCallback((operation: () => Promise<unknown>) => {
-        writeQueue.current = writeQueue.current
-            .catch(() => undefined)
-            .then(operation)
-            .catch(error => showFailure("storage-write", "Global Soundboardのデータを保存できませんでした。", error));
-    }, []);
+    const saveData = React.useCallback((name: "favorites" | "history" | "search", value: string[] | string | null) => {
+        void savePickerData(userId, name, value).catch(error => {
+            if (mountedRef.current) setStorageWriteFailed(true);
+            showFailure("storage-write", "Global Soundboardの変更を保存できませんでした。画面の再試行から保存できます。", error);
+        });
+    }, [userId]);
 
     React.useEffect(() => {
         let active = true;
-        void Promise.all([
-            DataStore.get<string[]>(getDataKey("favorites")),
-            DataStore.get<string[]>(getDataKey("history")),
-            DataStore.get<string>(getDataKey("search"))
-        ]).then(([savedFavorites, savedHistory, savedSearch]) => {
+        setStorageStatus("loading");
+        void loadPickerData(userId, historyLimit).then(saved => {
             if (!active) return;
-            setFavorites(new Set(Array.isArray(savedFavorites) ? savedFavorites.filter(key => typeof key === "string") : []));
-            setHistory(Array.isArray(savedHistory)
-                ? Array.from(new Set(savedHistory.filter(key => typeof key === "string"))).slice(0, historyLimit)
-                : []);
-            if (visibleSettings.rememberSearch && typeof savedSearch === "string") setSearch(savedSearch);
-            setStorageReady(true);
+            favoritesRef.current = saved.favorites;
+            historyRef.current = saved.history;
+            setFavorites(saved.favorites);
+            setHistory(saved.history);
+            setStorageWriteFailed(saved.unsavedChanges);
+            if (rememberSearchRef.current && !searchEditedRef.current) setSearch(saved.search);
+            setStorageStatus("ready");
         }).catch(error => {
             if (!active) return;
             showFailure("storage-read", "Global Soundboardの保存データを読み込めませんでした。", error);
-            setStorageReady(true);
+            setStorageStatus("error");
         });
 
         return () => {
             active = false;
         };
-    }, []);
+    }, [storageAttempt, userId]);
 
     React.useEffect(() => {
         let active = true;
@@ -297,25 +303,31 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
     }, [refreshAttempt]);
 
     React.useEffect(() => subscribeLocalPlayback(setLocalPlayback), []);
-    React.useEffect(() => () => stopCurrentSound(), []);
+    React.useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            stopCurrentSound();
+        };
+    }, []);
 
     React.useEffect(() => {
         if (!storageReady) return;
         if (!visibleSettings.rememberSearch) {
-            queueWrite(() => DataStore.del(getDataKey("search")));
+            saveData("search", null);
             return;
         }
 
         const timeout = window.setTimeout(() => {
-            queueWrite(() => DataStore.set(getDataKey("search"), search));
+            saveData("search", search);
         }, 300);
         return () => window.clearTimeout(timeout);
-    }, [queueWrite, search, storageReady, visibleSettings.rememberSearch]);
+    }, [saveData, search, storageReady, visibleSettings.rememberSearch]);
 
     React.useEffect(() => () => {
         if (!storageReadyRef.current || !rememberSearchRef.current) return;
-        queueWrite(() => DataStore.set(getDataKey("search"), searchRef.current));
-    }, [queueWrite]);
+        saveData("search", searchRef.current);
+    }, [saveData]);
 
     React.useEffect(() => {
         if (outputSupported) return;
@@ -324,15 +336,17 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
     }, [outputSupported, visibleSettings.fallbackMode, visibleSettings.playbackMode]);
 
     React.useEffect(() => {
-        setVisibleLimit(INITIAL_RENDER_LIMIT);
+        setPage(0);
+        if (listRef.current) listRef.current.scrollTop = 0;
     }, [deferredSearch, guildId, tab, visibleSettings.showUnavailable]);
 
     React.useEffect(() => {
         if (!storageReady || history.length <= historyLimit) return;
         const next = history.slice(0, historyLimit);
+        historyRef.current = next;
         setHistory(next);
-        queueWrite(() => DataStore.set(getDataKey("history"), next));
-    }, [history, historyLimit, queueWrite, storageReady]);
+        saveData("history", next);
+    }, [history, historyLimit, saveData, storageReady]);
 
     const guildOptions = React.useMemo<GuildOption[]>(() => {
         const counts = new Map<string, GuildOption>();
@@ -353,6 +367,10 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
         ];
     }, [allSounds]);
 
+    React.useEffect(() => {
+        if (guildId !== "all" && !guildOptions.some(option => option.value === guildId)) setGuildId("all");
+    }, [guildId, guildOptions]);
+
     const filteredSounds = React.useMemo(() => filterSounds(allSounds, {
         favorites,
         guildId,
@@ -361,7 +379,15 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
         showUnavailable: visibleSettings.showUnavailable,
         tab
     }), [allSounds, deferredSearch, favorites, guildId, history, tab, visibleSettings.showUnavailable]);
-    const visibleSounds = filteredSounds.slice(0, visibleLimit);
+    // Keep the mounted card count bounded, including after browsing thousands of sounds.
+    const pageCount = Math.max(1, Math.ceil(filteredSounds.length / PAGE_SIZE));
+    const currentPage = Math.min(page, pageCount - 1);
+    const visibleSounds = filteredSounds.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+
+    React.useEffect(() => {
+        if (listRef.current) listRef.current.scrollTop = 0;
+        if (page !== currentPage) setPage(currentPage);
+    }, [currentPage, page]);
     const knownFavorites = React.useMemo(
         () => allSounds.reduce((count, sound) => count + Number(favorites.has(sound.key)), 0),
         [allSounds, favorites]
@@ -372,28 +398,41 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
     }, [allSounds, history]);
 
     const recordHistory = React.useCallback((sound: GlobalSound) => {
-        setHistory(previous => {
-            const next = pushRecent(previous, sound.key, historyLimit);
-            queueWrite(() => DataStore.set(getDataKey("history"), next));
-            return next;
-        });
-    }, [historyLimit, queueWrite]);
+        if (!mountedRef.current || !storageReadyRef.current) return;
+        const next = pushRecent(historyRef.current, sound.key, historyLimit);
+        historyRef.current = next;
+        setHistory(next);
+        saveData("history", next);
+    }, [historyLimit, saveData]);
 
     const toggleFavorite = React.useCallback((sound: GlobalSound) => {
-        if (!storageReady) return;
-        setFavorites(previous => {
-            const next = new Set(previous);
-            next.has(sound.key) ? next.delete(sound.key) : next.add(sound.key);
-            queueWrite(() => DataStore.set(getDataKey("favorites"), Array.from(next)));
-            return next;
-        });
-    }, [queueWrite, storageReady]);
+        if (!mountedRef.current || !storageReadyRef.current) return;
+        const next = new Set(favoritesRef.current);
+        next.has(sound.key) ? next.delete(sound.key) : next.add(sound.key);
+        favoritesRef.current = next;
+        setFavorites(next);
+        saveData("favorites", Array.from(next));
+    }, [saveData]);
+
+    const retrySave = async () => {
+        try {
+            await Promise.all([
+                savePickerData(userId, "favorites", Array.from(favoritesRef.current)),
+                savePickerData(userId, "history", historyRef.current),
+                savePickerData(userId, "search", rememberSearchRef.current ? searchRef.current : null)
+            ]);
+            if (mountedRef.current) setStorageWriteFailed(false);
+        } catch (error) {
+            showFailure("storage-write", "Global Soundboardの変更を保存できませんでした。", error);
+        }
+    };
 
     const playLocal = React.useCallback(async (sound: GlobalSound, mode: "output" | "preview") => {
         try {
             const played = await playLocalSound(sound, resolveSoundUrl(sound.soundId), mode, visibleSettings.masterVolume);
             if (played) recordHistory(sound);
         } catch (error) {
+            if (!mountedRef.current) return;
             const deviceMissing = error instanceof OutputDeviceMissingError;
             showFailure(
                 deviceMissing ? "device-missing" : `play-${mode}`,
@@ -407,9 +446,11 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
         }
     }, [recordHistory, visibleSettings.masterVolume]);
 
-    const playSound = React.useCallback(async (sound: GlobalSound, forcedMode?: PlaybackMode) => {
-        if (!storageReady) return;
-        if (!soundStillExists(sound)) {
+    const playSound = React.useCallback(async (clickedSound: GlobalSound, forcedMode?: PlaybackMode) => {
+        if (!mountedRef.current) return;
+        setNativeRequest("");
+        const sound = getCurrentSound(clickedSound);
+        if (!sound) {
             showFailure("sound-deleted", "このSoundは削除されたか、サーバーから利用できなくなりました。");
             return;
         }
@@ -424,9 +465,11 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
             return;
         }
 
+        stopCurrentSound();
         const result = playNative(sound);
         if (result.ok) {
             recordHistory(sound);
+            setNativeRequest(`${sound.name}：Discordへ再生を要求しました。送信先での再生完了は確認できません。`);
             return;
         }
 
@@ -438,7 +481,7 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
 
         const fallback = visibleSettings.fallbackMode as FallbackMode;
         if (fallback !== "disabled") await playLocal(sound, fallback);
-    }, [playLocal, recordHistory, storageReady, visibleSettings.fallbackMode, visibleSettings.playbackMode]);
+    }, [playLocal, recordHistory, visibleSettings.fallbackMode, visibleSettings.playbackMode]);
 
     const filterGuild = React.useCallback((sound: GlobalSound) => {
         setGuildId(sound.guildId);
@@ -462,9 +505,11 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
                 <div className="vc-gsb-controls">
                     <TextInput
                         aria-label="Soundを検索"
-                        disabled={!storageReady}
-                        maxLength={null}
-                        onChange={setSearch}
+                        maxLength={1024}
+                        onChange={value => {
+                            searchEditedRef.current = true;
+                            setSearch(value);
+                        }}
                         placeholder="サウンド名・サーバー名・絵文字で検索"
                         value={search}
                     />
@@ -510,9 +555,9 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
                             serialize={String}
                         />
                         <label className="vc-gsb-volume">
-                            <span>音量</span>
+                            <span>ローカル音量</span>
                             <input
-                                aria-label="Master Volume"
+                                aria-label="Audio Outputとプレビューの音量"
                                 max={200}
                                 min={0}
                                 onChange={event => settings.store.masterVolume = Number(event.currentTarget.value)}
@@ -533,7 +578,42 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
                     </div>
                 </div>
 
-                <div className="vc-gsb-list">
+                <div className="vc-gsb-playback-help">
+                    <p>{visibleSettings.playbackMode === "native"
+                        ? "カード本体：Discord標準のVC再生を要求します。VC参加・権限が必要で、他サーバーの音はNitroなどの利用条件に従います。"
+                        : visibleSettings.playbackMode === "output"
+                            ? "カード本体：下の出力デバイスへ再生します。VCへ送るには仮想ケーブルなどの設定が必要です。マイク音声の自動混合は行いません。"
+                            : "カード本体：この端末の既定の出力デバイスで試聴します。"}</p>
+                    <p>小さい▶は常にローカル試聴です。ローカル音量・停止はAudio Outputと試聴に適用されます。</p>
+                    {visibleSettings.playbackMode === "native" && <p>
+                        フォールバック：{visibleSettings.fallbackMode === "disabled"
+                            ? "無効"
+                            : visibleSettings.fallbackMode === "output" ? "Audio Output" : "Local Preview"}（純正の事前判定失敗時のみ）。履歴にはVCへの再生要求も含まれます。
+                    </p>}
+                    {visibleSettings.playbackMode === "output" && <OutputDeviceSetting compact />}
+                    <div aria-live="polite" className="vc-gsb-playback-status" role="status">
+                        {localPlayback
+                            ? `${localPlayback.mode === "output" ? "Audio Output" : "ローカル試聴"}：${localPlayback.status === "loading" ? "読み込み中…（停止できます）" : "再生中"}`
+                            : nativeRequest}
+                    </div>
+                </div>
+
+                <div className="vc-gsb-list" ref={listRef}>
+                    {storageStatus === "loading" && <div aria-live="polite" className="vc-gsb-storage-status" role="status">
+                        お気に入り・履歴を読み込んでいます。再生は利用できます。
+                    </div>}
+                    {storageStatus === "error" && <div aria-live="polite" className="vc-gsb-refresh-error" role="status">
+                        <span>保存データを読み込めませんでした。再生は利用できますが、お気に入りの変更と履歴の保存は停止しています。</span>
+                        <Button onClick={() => setStorageAttempt(attempt => attempt + 1)} size="small" variant="secondary">
+                            読み込みを再試行
+                        </Button>
+                    </div>}
+                    {storageWriteFailed && <div aria-live="polite" className="vc-gsb-refresh-error" role="status">
+                        <span>未保存の変更があります。この画面を閉じる前に保存を再試行してください。</span>
+                        <Button onClick={() => void retrySave()} size="small" variant="secondary">
+                            保存を再試行
+                        </Button>
+                    </div>}
                     {refreshStatus === "error" && <div aria-live="polite" className="vc-gsb-refresh-error" role="status">
                         <span>Soundboard一覧を更新できませんでした。保存済み一覧があればそのまま利用できます。</span>
                         <Button onClick={() => setRefreshAttempt(attempt => attempt + 1)} size="small" variant="secondary">
@@ -543,7 +623,7 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
 
                     {!SoundboardStore
                         ? <div aria-live="polite" className="vc-gsb-empty" role="status">SoundboardStoreが見つかりません。Discord更新後にVencordを更新してください。</div>
-                        : !storageReady || refreshStatus === "loading" && allSounds.length === 0
+                        : refreshStatus === "loading" && allSounds.length === 0
                             ? <div aria-live="polite" className="vc-gsb-empty" role="status">Soundboardを読み込んでいます…</div>
                             : refreshStatus === "error" && allSounds.length === 0
                                 ? null
@@ -551,14 +631,15 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
                                     ? <div aria-live="polite" className="vc-gsb-empty" role="status">条件に一致するSoundはありません。</div>
                                 : <div className="vc-gsb-grid">
                                     {visibleSounds.map(sound => <SoundCard
-                                        disabled={!storageReady || !sound.available}
+                                        disabled={!sound.available}
                                         favorite={favorites.has(sound.key)}
                                         favoriteDisabled={!storageReady}
                                         filterGuild={filterGuild}
                                         key={sound.key}
+                                        loading={localPlayback?.key === sound.key && localPlayback.status === "loading"}
                                         onPlay={playSoundCard}
                                         onPreview={previewSoundCard}
-                                        playing={localPlayback?.key === sound.key || nativePlaying.has(sound.soundId)}
+                                        playing={localPlayback?.key === sound.key && localPlayback.status === "playing" || nativePlaying.has(sound.soundId)}
                                         showEmoji={visibleSettings.showEmoji}
                                         showGuildIcons={visibleSettings.showGuildIcons}
                                         sound={sound}
@@ -566,14 +647,16 @@ export function GlobalSoundboardModal(props: RenderModalProps) {
                                     />)}
                                 </div>}
 
-                    {filteredSounds.length > visibleLimit && <Button
-                        className="vc-gsb-more"
-                        onClick={() => setVisibleLimit(limit => limit + INITIAL_RENDER_LIMIT)}
-                        variant="secondary"
-                    >
-                        さらに表示（残り {(filteredSounds.length - visibleLimit).toLocaleString()}件）
-                    </Button>}
                 </div>
+                {pageCount > 1 && <div aria-label="サウンド一覧のページ" className="vc-gsb-pagination">
+                    <Button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} size="small" variant="secondary">
+                        前へ
+                    </Button>
+                    <span aria-live="polite">{currentPage + 1} / {pageCount} ページ（{filteredSounds.length.toLocaleString()}件）</span>
+                    <Button disabled={currentPage + 1 === pageCount} onClick={() => setPage(currentPage + 1)} size="small" variant="secondary">
+                        次へ
+                    </Button>
+                </div>}
             </div>
         </Modal>
     );
