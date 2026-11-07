@@ -6,8 +6,10 @@
 
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
+import { Heading } from "@components/Heading";
+import { Paragraph } from "@components/Paragraph";
 import { makeRange, OptionType } from "@utils/types";
-import { Forms, React, Select } from "@webpack/common";
+import { React, Select } from "@webpack/common";
 
 import {
     getSelectedOutputDevice,
@@ -79,9 +81,9 @@ export function OutputDeviceSetting({ compact = false }: { compact?: boolean; })
 
     return (
         <div>
-            {!compact && <Forms.FormTitle>Audio Output Device</Forms.FormTitle>}
+            {!compact && <Heading>Audio Output Device</Heading>}
             {!supported
-                ? <Forms.FormText>この環境ではsetSinkIdによる出力先の選択を利用できません。</Forms.FormText>
+                ? <Paragraph>この環境ではsetSinkIdによる出力先の選択を利用できません。</Paragraph>
                 : <Select
                     {...selectAriaLabel("Audio Output Device")}
                     closeOnSelect
@@ -106,14 +108,14 @@ export function OutputDeviceSetting({ compact = false }: { compact?: boolean; })
                     }}
                     serialize={String}
                 />}
-            {failed && <Forms.FormText>出力先を確認できませんでした。再試行してください。</Forms.FormText>}
+            {failed && <Paragraph>出力先を確認できませんでした。再試行してください。</Paragraph>}
             {supported && <Button disabled={loading} onClick={() => void refresh()} size="small" variant="secondary">
                 {failed ? "再試行" : "出力先を再読み込み"}
             </Button>}
-            {!compact && <Forms.FormText>
+            {!compact && <Paragraph>
                 Audio Outputは選択した再生デバイスへ出力します。VCへ送るには仮想ケーブルなどをDiscordの入力に設定してください。マイクの混合は行いません。
                 デバイスIDはこの端末のDataStoreだけに保存され、外部へ送信しません。
-            </Forms.FormText>}
+            </Paragraph>}
         </div>
     );
 }

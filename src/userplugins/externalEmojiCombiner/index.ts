@@ -11,7 +11,7 @@ import definePlugin, { makeRange, OptionType, StartAt } from "@utils/types";
 import type { CloudUpload as TCloudUpload, CustomEmoji } from "@vencord/discord-types";
 import { CloudUploadPlatform } from "@vencord/discord-types/enums";
 import { findLazy } from "@webpack";
-import { EmojiStore, GuildMemberStore, PermissionsBits, PermissionStore, showToast, Toasts, UserStore } from "@webpack/common";
+import { EmojiStore, GuildMemberStore, PermissionsBits, PermissionStore, showToast, UserStore } from "@webpack/common";
 
 import { EmojiToken, parseEmojiTokens, removeEmojiTokens, selectEmojiTokensToCombine } from "./emojiParser";
 import { composeEmojiImage, EmojiImage } from "./imageComposer";
@@ -185,7 +185,7 @@ export default definePlugin({
             plan = getCombinePlan(message, props);
         } catch (error) {
             logger.error("Failed to prepare an emoji combination", error);
-            showToast("Failed to combine emojis. Message was not modified.", Toasts.Type.FAILURE);
+            showToast({ text: "Failed to combine emojis. Message was not modified.", variant: "critical" });
             return;
         }
 
@@ -216,11 +216,11 @@ export default definePlugin({
 
             if (result.animationFallback) {
                 logger.warn("Animated emoji decoding failed; used a static PNG instead", result.animationError);
-                showToast("Animated emoji could not be preserved. Sent as a static image.", Toasts.Type.MESSAGE);
+                showToast({ text: "Animated emoji could not be preserved. Sent as a static image." });
             }
         } catch (error) {
             logger.error("Failed to combine or upload emojis", error);
-            showToast("Failed to combine emojis. Message was not modified.", Toasts.Type.FAILURE);
+            showToast({ text: "Failed to combine emojis. Message was not modified.", variant: "critical" });
         } finally {
             inFlightChannels.delete(channelId);
         }

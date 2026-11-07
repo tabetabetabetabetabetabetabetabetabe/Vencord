@@ -16,7 +16,6 @@ import {
     RTCConnectionStore,
     showToast,
     SoundboardStore,
-    Toasts,
     UserStore,
     VoiceStateStore
 } from "@webpack/common";
@@ -59,7 +58,7 @@ export function showFailure(key: string, message: string, error?: unknown) {
     if (now - (toastTimes.get(key) ?? 0) < 5_000) return;
 
     toastTimes.set(key, now);
-    showToast(message, Toasts.Type.FAILURE, { duration: 5_000 });
+    showToast({ text: message, variant: "critical", duration: 5_000 });
 }
 
 export function collectGlobalSounds(): GlobalSound[] {

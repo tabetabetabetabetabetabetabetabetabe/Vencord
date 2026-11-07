@@ -20,7 +20,8 @@ const resource = (version, file = "app.asar") => path.join(discordPath, version,
 const shutdownEvent = { preventDefault() { assert.fail("Shutdown must not be cancelled"); } };
 
 function load({ platform = "win32", env = {}, versions = ["app-1.0.9", "app-1.0.10"], backup = false, scanError = false, copyFailures = 0, restoreError = false } = {}) {
-    const app = new EventEmitter();
+    class MockEmitter extends EventEmitter {}
+    const app = new MockEmitter();
     const files = new Map(versions.map(version => [resource(version), `original:${version}`]));
     files.set(resource("app-1.0.9"), "custom-patcher");
     if (backup) files.set(resource("app-1.0.10", "_app.asar"), "existing-backup");
@@ -28,6 +29,7 @@ function load({ platform = "win32", env = {}, versions = ["app-1.0.9", "app-1.0.
     const errors = [];
     const mocks = {
         electron: { app },
+        events: MockEmitter,
         path,
         "original-fs": {
             readdirSync(directory) {
@@ -69,7 +71,7 @@ function load({ platform = "win32", env = {}, versions = ["app-1.0.9", "app-1.0.
     return {
         app, files, writes, errors,
         createWindow() {
-            const window = new EventEmitter();
+            const window = new MockEmitter();
             app.emit("browser-window-created", {}, window);
             return window;
         }
@@ -87,7 +89,7 @@ test("no update leaves all files unchanged during quit and Windows session end",
     assert.deepEqual(state.writes, []);
 });
 
-for (const event of ["before-quit", "query-session-end", "session-end"]) {
+for (const event of ["host-updated", "before-quit", "query-session-end", "session-end"]) {
     test(`${event} patches only the latest numeric version and keeps Discord's original`, () => {
         const state = load({ versions: ["app-1.0.11", "app-1.0.9", "packages", "app-1.0.10"] });
         const emitter = event === "before-quit" ? state.app : state.createWindow();
@@ -124,13 +126,13 @@ test("an existing backup is never overwritten", () => {
     assert.deepEqual(state.writes, []);
 });
 
-test("Windows hooks are absent on other platforms; before-quit remains available", () => {
+test("Linux patches on quit and macOS leaves the host untouched", () => {
     for (const platform of ["linux", "darwin"]) {
         const state = load({ platform });
         assert.equal(state.app.listenerCount("browser-window-created"), 0);
         assert.equal(state.createWindow().listenerCount("session-end"), 0);
         state.app.emit("before-quit", shutdownEvent);
-        assert.equal(state.writes.length, 2);
+        assert.equal(state.writes.length, platform === "linux" ? 2 : 0);
     }
 });
 

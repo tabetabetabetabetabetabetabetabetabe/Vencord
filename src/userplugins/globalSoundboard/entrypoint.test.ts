@@ -29,6 +29,8 @@ async function fixture() {
         "./style.css": {},
         "@api/ChatButtons": {},
         "@components/Button": {},
+        "@components/Heading": {},
+        "@components/Paragraph": {},
         "@utils/discord": {},
         "@api/DataStore": {
             get: async () => { calls.storageReads++; return undefined; },

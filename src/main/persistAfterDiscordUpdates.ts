@@ -17,6 +17,7 @@
 */
 
 import { app } from "electron";
+import EventEmitter from "events";
 import { copyFileSync, existsSync, readdirSync, renameSync } from "original-fs";
 import { basename, dirname, join } from "path";
 
@@ -74,12 +75,23 @@ function patchLatest() {
     }
 }
 
-// Try to patch latest on before-quit
-// Discord's Win32 updater will call app.quit() on restart and open new version on will-quit
-app.on("before-quit", patchLatest);
+if (process.platform === "win32" || process.platform === "linux") {
+    EventEmitter.prototype.emit = new Proxy(EventEmitter.prototype.emit, {
+        apply(target, thisArg, argArray) {
+            if (argArray[0] === "host-updated") {
+                patchLatest();
+            }
+
+            return Reflect.apply(target, thisArg, argArray);
+        },
+    });
+
+    // Try to patch latest on before-quit
+    // Discord's Win32 updater will call app.quit() on restart and open new version on will-quit
+    app.on("before-quit", patchLatest);
+}
 
 // Windows shutdown, restart and logoff do not emit before-quit.
-// Do not preventDefault: this must not cancel the session end.
 if (process.platform === "win32") {
     app.on("browser-window-created", (_, window) => {
         window.on("query-session-end", patchLatest);

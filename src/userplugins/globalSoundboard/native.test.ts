@@ -71,7 +71,7 @@ async function setup(window = { clearTimeout, setTimeout }) {
             PermissionStore: { can: () => state.permission },
             PermissionsBits: { SPEAK: 1n, USE_SOUNDBOARD: 2n },
             RTCConnectionStore: { getChannelId: () => channel.id, isConnected: () => state.connected },
-            showToast: (message: string) => calls.toasts.push(message),
+            showToast: ({ text }: { text: string; }) => calls.toasts.push(text),
             SoundboardStore: {
                 getSound: () => state.currentSound,
                 getSounds: () => {
@@ -80,7 +80,6 @@ async function setup(window = { clearTimeout, setTimeout }) {
                 },
                 isPlayingSound: () => true
             },
-            Toasts: { Type: { FAILURE: 0 } },
             UserStore: { getCurrentUser: () => user },
             VoiceStateStore: { getVoiceStateForChannel: () => state.voiceState }
         }
